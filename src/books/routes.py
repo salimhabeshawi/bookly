@@ -1,86 +1,63 @@
-from datetime import datetime
-
-from sqlmodel import desc, select
+from fastapi import APIRouter, status, HTTPException, Depends
+from src.books.schemas import Book, BookUpdateModel, BookCreateModel
+from typing import List
+from src.db.main import get_session
 from sqlmodel.ext.asyncio.session import AsyncSession
+from src.books.service import BookService
+from uuid import UUID
 
-from src.db.models import Book
+book_router = APIRouter()
+book_service = BookService()
 
-from .schemas import BookCreateModel, BookUpdateModel
+
+@book_router.get("/", response_model=List[Book])
+async def get_all_books(session: AsyncSession = Depends(get_session)) -> List[Book]:
+    books = await book_service.get_all_books(session)
+    return books
 
 
-class BookService:
-    async def get_all_books(self, session: AsyncSession):
-        statement = select(Book).order_by(desc(Book.created_at))
+@book_router.get("/{book_uuid}", response_model=Book)
+async def get_a_book(
+    book_uuid: UUID, session: AsyncSession = Depends(get_session)
+) -> Book:
+    book = await book_service.get_book(book_uuid, session)
 
-        result = await session.exec(statement)
-
-        return result.all()
-
-    async def get_user_books(self, user_uid: str, session: AsyncSession):
-        statement = (
-            select(Book)
-            .where(Book.user_uid == user_uid)
-            .order_by(desc(Book.created_at))
+    if book:
+        return book
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="book not found"
         )
 
-        result = await session.exec(statement)
 
-        return result.all()
+@book_router.post("/", status_code=status.HTTP_201_CREATED, response_model=Book)
+async def create_a_book(
+    book_data: BookCreateModel, session: AsyncSession = Depends(get_session)
+) -> Book:
+    new_book = await book_service.create_book(book_data, session)
 
-    async def get_book(self, book_uid: str, session: AsyncSession):
-        statement = select(Book).where(Book.uid == book_uid)
+    return new_book
 
-        result = await session.exec(statement)
 
-        book = result.first()
+@book_router.patch("/{book_uuid}", response_model=Book)
+async def update_book(
+    book_uuid: UUID,
+    book_update_data: BookUpdateModel,
+    session: AsyncSession = Depends(get_session),
+) -> Book:
+    updated_book = await book_service.update_book(book_uuid, book_update_data, session)
 
-        return book if book is not None else None
+    if updated_book:
+        return updated_book
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="book not found")
 
-    async def create_book(
-        self, book_data: BookCreateModel, user_uid: str, session: AsyncSession
-    ):
-        book_data_dict = book_data.model_dump()
 
-        new_book = Book(**book_data_dict)
+@book_router.delete("/{book_uuid}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_book(book_uuid: UUID, session: AsyncSession = Depends(get_session)):
+    book_to_delete = await book_service.delete_book(book_uuid, session)
 
-        new_book.published_date = datetime.strptime(
-            book_data_dict["published_date"], "%Y-%m-%d"
-        )
-
-        new_book.user_uid = user_uid
-
-        session.add(new_book)
-
-        await session.commit()
-
-        return new_book
-
-    async def update_book(
-        self, book_uid: str, update_data: BookUpdateModel, session: AsyncSession
-    ):
-        book_to_update = await self.get_book(book_uid, session)
-
-        if book_to_update is not None:
-            update_data_dict = update_data.model_dump()
-
-            for k, v in update_data_dict.items():
-                setattr(book_to_update, k, v)
-
-            await session.commit()
-
-            return book_to_update
-        else:
-            return None
-
-    async def delete_book(self, book_uid: str, session: AsyncSession):
-        book_to_delete = await self.get_book(book_uid, session)
-
-        if book_to_delete is not None:
-            await session.delete(book_to_delete)
-
-            await session.commit()
-
-            return {}
-
-        else:
-            return None
+    if book_to_delete is not None:
+        return {}
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="book not found")
